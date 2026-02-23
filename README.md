@@ -10,7 +10,7 @@ MIPDB preprocessed EEG dataset.
 ## Methods
 - FFT-based power spectral density (no Signal Processing Toolbox required)
 - Automatic frontal/posterior channel detection
-- Regional band power averaging
+- Regional band power averaging (frontal theta, posterior alpha)
 
 ## Outputs
 - Alpha power per channel
