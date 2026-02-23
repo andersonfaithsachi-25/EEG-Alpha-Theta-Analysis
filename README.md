@@ -20,4 +20,10 @@ MIPDB preprocessed EEG dataset.
 - Theta/Alpha ratio
 
 ## Example Output
+posterior alpha: 9.202900e-02
+frontal theta: 3.339249e-01
 Theta/Alpha ratio ≈ 3.63 (example subject)
+Posterior channels found = 11
+Posterior channels
+Frontal channels found = 11
+Frontal channels
