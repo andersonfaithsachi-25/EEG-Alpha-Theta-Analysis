@@ -135,3 +135,5 @@ if ~isempty(posterior_idx), disp(labels(posterior_idx));
 end
 
 fprintf('Frontal channels found   (%d)\n', numel(frontal_idx))
+if ~isempty(frontal_idx), disp(labels(frontal_idx)); 
+end
