@@ -1,0 +1,233 @@
+%% EEG Band Power + Frontal Theta / Posterior Alpha Ratio + Spectral Entropy
+% Robust version:
+%  - Uses FFT-based PSD (no pwelch / no Signal Processing Toolbox)
+%  - Tries to find frontal/posterior channels by standard 10–20 labels
+%  - Falls back to chanlocs Y-coordinates if needed
+%
+% Outputs:
+%  - alpha_power: 1 x nCh absolute alpha power (8–12 Hz)
+%  - theta_power: 1 x nCh absolute theta power (4–8 Hz)
+%  - spectral_entropy: 1 x nCh normalized entropy (1–40 Hz)
+%  - posterior_alpha
+%  - frontal_theta
+%  - ratio (frontal_theta / posterior_alpha)
+%  - posterior_entropy
+%  - frontal_entropy
+
+clear; clc;
+
+%% 1) Load data
+filename = 'bp_A00054432006.mat';   % <-- change if needed
+S = load(filename);
+EEG = S.EEG;
+
+signal = double(EEG.data);    % [nCh x nSamples]
+fs = EEG.srate;
+labels = {EEG.chanlocs.labels};
+
+[nCh, nSamples] = size(signal);
+dur_sec = nSamples / fs;
+
+fprintf('Loaded %s\n', filename);
+fprintf('Channels: %d | Samples: %d | fs: %g Hz | Duration: %.1f sec\n', ...
+    nCh, nSamples, fs, dur_sec);
+
+%% 2) Compute PSD using FFT
+x = signal.';                % [nSamples x nCh]
+n = size(x,1);
+
+x = x - mean(x,1);           % remove DC offset
+nfft = 2^nextpow2(n);
+
+X = fft(x, nfft, 1);
+P2 = (abs(X)/n).^2;
+
+pxx = P2(1:nfft/2+1, :);
+pxx(2:end-1,:) = 2*pxx(2:end-1,:);
+
+f = fs*(0:(nfft/2))'/nfft;
+
+%% 3) Band Power
+alpha_idx = (f >= 8) & (f <= 12);
+theta_idx = (f >= 4) & (f <= 8);
+
+alpha_power = mean(pxx(alpha_idx, :), 1);
+theta_power = mean(pxx(theta_idx, :), 1);
+
+%% 4) Spectral Entropy (1–40 Hz)
+entropy_band = (f >= 1) & (f <= 40);
+pxx_entropy = pxx(entropy_band, :);
+
+nFreq_entropy = size(pxx_entropy,1);
+spectral_entropy = zeros(1, nCh);
+
+for ch = 1:nCh
+    psd_ch = pxx_entropy(:, ch);
+    psd_norm = psd_ch / (sum(psd_ch) + eps);
+    H = -sum(psd_norm .* log2(psd_norm + eps));
+    spectral_entropy(ch) = H / log2(nFreq_entropy);
+end
+
+%% 5) Select Posterior + Frontal Channels
+
+posterior_names = {'O1','O2','Oz','Pz','P3','P4','POz'};
+frontal_names   = {'Fz','F3','F4','Fp1','Fp2','FCz'};
+
+posterior_idx = find(ismember(labels, posterior_names));
+frontal_idx   = find(ismember(labels, frontal_names));
+
+if isempty(posterior_idx) || isempty(frontal_idx)
+    warning('10-20 label match failed. Attempting AUTO channel selection...');
+
+    chanlocs = EEG.chanlocs;
+    Y = nan(1, numel(chanlocs));
+
+    for k = 1:numel(chanlocs)
+        if isfield(chanlocs(k),'Y')
+            yk = chanlocs(k).Y;
+            if ischar(yk) || isstring(yk)
+                yk = str2double(yk);
+            end
+            Y(k) = yk;
+        end
+    end
+
+    valid = ~isnan(Y);
+
+    if sum(valid) >= 10
+        kN = max(5, round(0.10 * sum(valid)));
+        validIdx = find(valid);
+        [~, sortIdx] = sort(Y(valid), 'ascend');
+        posterior_idx = validIdx(sortIdx(1:kN));
+        frontal_idx   = validIdx(sortIdx(end-kN+1:end));
+    else
+        posterior_idx = [];
+        frontal_idx = [];
+    end
+end
+
+%% 6) Regional Averages
+
+if isempty(posterior_idx)
+    posterior_alpha = NaN;
+    posterior_entropy = NaN;
+else
+    posterior_alpha = mean(alpha_power(posterior_idx));
+    posterior_entropy = mean(spectral_entropy(posterior_idx));
+end
+
+if isempty(frontal_idx)
+    frontal_theta = NaN;
+    frontal_entropy = NaN;
+else
+    frontal_theta = mean(theta_power(frontal_idx));
+    frontal_entropy = mean(spectral_entropy(frontal_idx));
+end
+
+ratio = frontal_theta / posterior_alpha;
+
+%% 7) Display Results
+
+fprintf('\n--- BAND POWER RESULTS ---\n');
+fprintf('Posterior Alpha: %.6f\n', posterior_alpha);
+fprintf('Frontal Theta:   %.6f\n', frontal_theta);
+fprintf('Theta/Alpha Ratio: %.6f\n', ratio);
+
+fprintf('\n--- SPECTRAL ENTROPY RESULTS ---\n');
+fprintf('Posterior Entropy: %.4f\n', posterior_entropy);
+fprintf('Frontal Entropy:   %.4f\n', frontal_entropy);
+
+fprintf('\nPosterior channels (%d):\n', numel(posterior_idx));
+if ~isempty(posterior_idx), disp(labels(posterior_idx)); end
+
+fprintf('Frontal channels (%d):\n', numel(frontal_idx));
+if ~isempty(frontal_idx), disp(labels(frontal_idx)); end
+
+
+
+
+%% ============================================================
+%% EO vs EC CONDITION ANALYSIS (ADD BELOW YOUR EXISTING CODE)
+%% ============================================================
+
+disp('--- Segmenting Eyes Closed (102) vs Eyes Open (3) ---')
+
+% Clean event labels
+types = strtrim({EEG.event.type});
+event_lat = round([EEG.event.latency]);
+
+EC_code = '102';
+EO_code = '3';
+
+EC_idx = strcmp(types, EC_code);
+EO_idx = strcmp(types, EO_code);
+
+if ~any(EC_idx) || ~any(EO_idx)
+    error('Could not find EC (102) or EO (3) event codes.')
+end
+
+EC_lat = event_lat(EC_idx);
+EO_lat = event_lat(EO_idx);
+
+% Assume first EC followed by EO
+EC_start = EC_lat(1);
+EO_start = EO_lat(1);
+
+EC_data = signal(:, EC_start:EO_start-1);
+EO_data = signal(:, EO_start:end);
+
+%% ----- FEATURE EXTRACTION FUNCTION -----
+compute_features = @(data) extract_features(data, fs, posterior_idx, frontal_idx);
+
+EC_feat = compute_features(EC_data);
+EO_feat = compute_features(EO_data);
+
+%% ----- DISPLAY RESULTS -----
+fprintf('\n===== EYES CLOSED =====\n');
+disp(EC_feat)
+
+fprintf('\n===== EYES OPEN =====\n');
+disp(EO_feat)
+
+
+%% ----- LOCAL FUNCTION -----
+function feat = extract_features(signal, fs, posterior_idx, frontal_idx)
+
+signal = signal';
+signal = signal - mean(signal);
+
+n = size(signal,1);
+nfft = 2^nextpow2(n);
+
+X = fft(signal, nfft, 1);
+P2 = (abs(X)/n).^2;
+
+pxx = P2(1:nfft/2+1,:);
+pxx(2:end-1,:) = 2*pxx(2:end-1,:);
+f = fs*(0:(nfft/2))'/nfft;
+
+alpha_idx = (f>=8)&(f<=12);
+theta_idx = (f>=4)&(f<=8);
+entropy_idx = (f>=1)&(f<=40);
+
+alpha_power = mean(pxx(alpha_idx,:),1);
+theta_power = mean(pxx(theta_idx,:),1);
+
+pxx_entropy = pxx(entropy_idx,:);
+nFreq = size(pxx_entropy,1);
+spectral_entropy = zeros(1,size(pxx,2));
+
+for ch = 1:size(pxx,2)
+    psd = pxx_entropy(:,ch);
+    psd_norm = psd/(sum(psd)+eps);
+    H = -sum(psd_norm .* log2(psd_norm+eps));
+    spectral_entropy(ch) = H/log2(nFreq);
+end
+
+feat.posterior_alpha = mean(alpha_power(posterior_idx));
+feat.frontal_theta = mean(theta_power(frontal_idx));
+feat.theta_alpha_ratio = feat.frontal_theta / feat.posterior_alpha;
+feat.posterior_entropy = mean(spectral_entropy(posterior_idx));
+feat.frontal_entropy = mean(spectral_entropy(frontal_idx));
+
+end
